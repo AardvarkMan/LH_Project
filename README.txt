@@ -1,4 +1,12 @@
-﻿LATHE DISPLAY DEPLOYMENT
+This fork of the glennto/LH_Project was made as in 2023 I was unable to acquire the Adafruit TFT/Resistive Touch Screen displays used in the project. I though I had found a replica of the screen sold by Elegoo, however the pin requirements were not the same. Additionally there were some touch screen implementation differences as well as calibration changes.
+
+The largest change is that the Elegoo screen uses all the available digital pins, includeing 2 and 3, which are the Hardware Interrupt pins on the Arduino Uno. I ended up implementing the PinChange interrupt library from GreyGnome/EnableInterrupt.
+
+Credit to Glenn Tober for his work on this project.
+
+The original writeup begins here -----------------------------------------------------------------------------------------------------------
+
+LATHE DISPLAY DEPLOYMENT
 
 Arduino based code for an Arduino Uno and Adafruit TFT/
 Resistive Touch Screen display board combo that implements the Lathe Helper
