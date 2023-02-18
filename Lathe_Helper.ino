@@ -91,31 +91,53 @@ Global variables use 1145 bytes (55%) of dynamic memory, leaving 903 bytes for l
   (B)Sketch uses 20184 bytes (62%) of program storage space. Maximum is 32256 bytes.
 Global variables use 1179 bytes (57%) of dynamic memory, leaving 869 bytes for local variables. Maximum is 2048 bytes..
  ************************************************************************************************************************/
+#include <EnableInterrupt.h>
 
 #include "SPI.h"
-#include "Adafruit_GFX.h"
-#include "Adafruit_ILI9341.h"
-#include "Adafruit_STMPE610.h"
+#include <Elegoo_TFTLCD.h>
+#include <pin_magic.h>
+#include <registers.h>
+#include <Elegoo_GFX.h>
+#include <TouchScreen.h>
 
 // Lathe Helper definitions next
 String VERSION="Ver 0.10";
 
 // This is calibration data for the raw touch data to the screen coordinates
-#define TS_MINX 150
-#define TS_MINY 130
-#define TS_MAXX 3800
-#define TS_MAXY 4000
+#define TS_MINX 100//150
+#define TS_MINY 80//130
+#define TS_MAXX 1000//3800
+#define TS_MAXY 900//4000
+#define MINPRESSURE 10
+#define MAXPRESSURE 1000
 
 //  Instantiate a ts TFT class
-#define STMPE_CS 8
-Adafruit_STMPE610 ts = Adafruit_STMPE610(STMPE_CS);
+#define YP A3  // must be an analog pin, use "An" notation!
+#define XM A2  // must be an analog pin, use "An" notation!
+#define YM 9   // can be a digital pin
+#define XP 8   // can be a digital pin
+TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 
-// Control pins for the Adafruit TFT shield (default).
-#define TFT_DC 9
-#define TFT_CS 10
+// Control pins for the Elegoo TFT shield (default).
+#define LCD_CS A3
+#define LCD_CD A2
+#define LCD_WR A1
+#define LCD_RD A0
+// optional
+#define LCD_RESET A4
 
 // Use hardware SPI (on Uno, #13, #12, #11) and the above for CS/DC
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+Elegoo_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
+
+// Assign human-readable names to some common 16-bit color values:
+#define  BLACK   0x0000
+#define BLUE    0x001F
+#define RED     0xF800
+#define GREEN   0x07E0
+#define CYAN    0x07FF
+#define MAGENTA 0xF81F
+#define YELLOW  0xFFE0
+#define WHITE   0xFFFF
 
 //  set screen rotation (1-4, [N E S W])
 uint8_t rotation = 1;
@@ -141,10 +163,6 @@ const byte NBR_TEETH = 1;
 //  comment out the following line if you don't want belt pulley settings displayed (ie, your lathe
 //  has a variable speed direct drive)
 #define DISPLAY_PULLEY_CODES
-
-//  comment out the following line if you don't want measured rpm displayed (probably because your
-//  lathe is already providing spindle rpm to you)
-#define DISPLAY_ACTUAL_RPM
 
 //  Set the power on display values for the change buttons. Do this to make your favorite material,
 //  your most used cutting diameter or your most used tool type be displayed at power on.
@@ -245,11 +263,10 @@ const String tool_List[] = {"  HSS", "CARBIDE"};
 //************************************end advanced variable definitions*********************************************
 
 //************************************Lathe_Helper Core Program section************************************************
-#ifdef DISPLAY_ACTUAL_RPM // Only include next block if rpm sensor activated
 //  variables used to compute actual rpm
 unsigned long Time, save_Time;
 //use digital pin 2 for the rpm sensor pulse input signal
-const int pin_D2 = 2;
+const int encoder_Pin = A5;
 // state is a toggle which is flipped everytime interrupt routine detects a falling rpm sensor signal
 volatile int state = LOW;
 int save_State = state;
@@ -258,7 +275,6 @@ int rpm = 0;
 // rpm counter variable and max count to reduce actual rpm display jitter
 int count = 1;
 const int count_Max = 50;
-#endif  //End DISPLAY_ACTUAL_RPM block
 
 // an rpm string cache to prevent redundant displays of the same valued target rpm
 String save_String = "";
@@ -266,8 +282,28 @@ String save_String = "";
 //  starting SFM value
 int material_SFM = material_list_SFM_HSS[material_List_Index];
 
+bool RPM_Enabled = false;
+
+long LastTouch_Millis = 0;
+long TouchDelay = 1000;
 
 //*******************************Program Functions Sections****************************************
+void enable_RPM_Interrupt()
+{
+  if(RPM_Enabled == false)
+  {
+    //  setup interrupt structure for rpm detection
+    //  Allegro Hall Effect sensor has Open Collector output so use input  internal pull up resistor
+    pinMode(encoder_Pin, INPUT_PULLUP);
+    //attachInterrupt(digitalPinToInterrupt(encoder_Pin), rpm_event, FALLING);
+    enableInterrupt(encoder_Pin, rpm_event,FALLING);
+    save_State = state;
+    Time = micros();
+    RPM_Enabled = true;
+  }
+}
+
+
 void display_RPMS()
 //  display rpm values in two locations
 {
@@ -294,39 +330,35 @@ void display_RPMS()
   //  first location is for target rpm
 
   if (save_String != rpm_Set) { //  wrote only if changed
-    tft.fillRect(RPM_X_OFFSET, RPM_TARGET_Y_OFFSET, 130, 40, ILI9341_BLACK);
+    tft.fillRect(RPM_X_OFFSET, RPM_TARGET_Y_OFFSET, 130, 40, BLACK);
     tft.setCursor(RPM_X_OFFSET + 5, RPM_TARGET_Y_OFFSET + 15);
     write_Text(rpm_Set + pulley_Set, 2);
     save_String = rpm_Set;
   }
 
   // Second location is for actual rpm
-#ifdef DISPLAY_ACTUAL_RPM // Only include next block if rpm sensor activated
-  tft.fillRect(RPM_X_OFFSET, RPM_ACTUAL_Y_OFFSET, 130, 40, ILI9341_BLACK);
+  tft.fillRect(RPM_X_OFFSET, RPM_ACTUAL_Y_OFFSET, 130, 40, BLACK);
   tft.setCursor(RPM_X_OFFSET + 5, RPM_ACTUAL_Y_OFFSET + 15);
   write_Text(String(rpm), 2);
-#endif //end DISPLAY_ACTUAL_RPM block
-
+  
   return;
 }
 
 void write_Text(String text, byte size) {
   //  write white text of size at current cursor location
-  tft.setTextColor(ILI9341_WHITE);
+  tft.setTextColor(WHITE);
   tft.setTextSize(size);
   tft.println(text);
-
   return;
-}
+};
 
 void write_Change_Button(int y_offset, String top_Text, String bot_Text)
 //  routine writes one of three red change button windows
 //  y_offset differentiates between one of three button windows (material, diameter and tool type).
 //  Wipes a (red) push button window clean and then displays top and bottom (if not null) texts
-
-{
+{  
   //  next red fill rectangle sized to cover all previous white text in change button box
-  tft.fillRect(BUTTON_X, BUTTON_Y + y_offset, BUTTON_W, BUTTON_H, ILI9341_RED);
+  tft.fillRect(BUTTON_X, BUTTON_Y + y_offset, BUTTON_W, BUTTON_H, RED);
   if (bot_Text == "") {
     //  locate single text field in vertical center of button window
     //  was BUTTON_X + 12
@@ -350,9 +382,9 @@ void write_Change_Button(int y_offset, String top_Text, String bot_Text)
 void write_Static_Text()
 //  routine blanks the screen and paints all static text
 {
-  tft.fillScreen(ILI9341_BLACK);
+  tft.fillScreen(BLACK);
   
-  tft.setTextColor(ILI9341_RED);
+  tft.setTextColor(RED);
   tft.setTextSize(2);
   tft.setCursor(10, 80);
   tft.println(VERSION + option);
@@ -364,26 +396,22 @@ void write_Static_Text()
   tft.setCursor(10, 140);
   tft.println(F("GNU GPL VER3"));
   
-
-
   delay(5000);
 
-  tft.fillScreen(ILI9341_BLACK);
+  tft.fillScreen(BLACK);
   tft.setCursor(0, 10);
   write_Text("LATHE HELPER", 3);
 
   //  text we want red cannot call write_Text. Maybe fix this?
   tft.setCursor(0, 70);
-  tft.setTextColor(ILI9341_RED);
+  tft.setTextColor(RED);
   tft.setTextSize(2);
   tft.println(F(" Target RPM:"));
 
-#ifdef DISPLAY_ACTUAL_RPM // Only include next block if rpm sensor activated
   tft.setCursor(0, 150);
-  tft.setTextColor(ILI9341_RED);
+  tft.setTextColor(RED);
   tft.setTextSize(2);
   tft.println(F(" Actual RPM:"));
-#endif // End DISPLAY_ACTUAL_RPM block
 
   return;
 }
@@ -391,72 +419,82 @@ void write_Static_Text()
 void Touch(int y_offset)
 //  routine is polled from within loop() to test for button pushes and act accordingly
 {
-  if (!ts.bufferEmpty()) {
-    TS_Point p = ts.getPoint();
-    // Scale using the calibration #'s
-    // and rotate coordinate system
-    p.x = map(p.x, TS_MINY, TS_MAXY, 0, tft.height());
-    p.y = map(p.y, TS_MINX, TS_MAXX, 0, tft.width());
-    int y = tft.height() - p.x;
-    int x = p.y;
-
-    if ((x > BUTTON_X) && (x < (BUTTON_X + BUTTON_W))) {
-      if ((y > BUTTON_Y + y_offset) && (y <= (BUTTON_Y + y_offset + BUTTON_H))) {
-        if (y_offset == MATERIAL_CHANGE_BUTTON_Y_OFFSET) {
-          //  the material change area was depressed
-          if (x >= BUTTON_X + BUTTON_W / 2) {
-            //right side of area was pushed
-            material_List_Index = material_List_Index + 1;
-            if (material_List_Index > material_list_Length) {
-              material_List_Index = 0;
-            }
-          }
-          else {
-            //right side of change area was depressed
-            if (material_List_Index == 0) {
-              material_List_Index = material_list_Length;
-            }
-            else {
-              material_List_Index = material_List_Index - 1;
-            }
-          }
-
-          write_Change_Button(MATERIAL_CHANGE_BUTTON_Y_OFFSET, metals_List[material_list_Top[material_List_Index]], material_list_Bot[material_List_Index]);
-        }
-
-        if (y_offset == DIAMETER_CHANGE_BUTTON_Y_OFFSET) {
-          //The diameter change area was depressed
-          if (x >= BUTTON_X + BUTTON_W / 2) {
-            //right side of area was pushed
-            diameter_List_Index = diameter_List_Index + 1;
-            if (diameter_List_Index > diameter_list_Length) {
-              diameter_List_Index = 0;
-            }
-          }
-          else {
-            //left side of change area was depressed
-            if (diameter_List_Index == 0) {
-              diameter_List_Index = diameter_list_Length;
+  if((LastTouch_Millis + TouchDelay) < millis())
+  {    
+    digitalWrite(13, HIGH);
+    TSPoint p = ts.getPoint();
+    digitalWrite(13, LOW);
+    pinMode(XM, OUTPUT);
+    pinMode(YP, OUTPUT);
+    
+    if (p.z > MINPRESSURE && p.z < MAXPRESSURE) {
+      // Scale using the calibration #'s
+      // and rotate coordinate system
+    
+      p.x = map(p.x, TS_MINY, TS_MAXY, 0, tft.height());
+      p.y = map(p.y, TS_MINX, TS_MAXX, tft.width(), 0);
+      int y = tft.height() - p.x;
+      int x = p.y;
+        
+      if ((x > BUTTON_X) && (x < (BUTTON_X + BUTTON_W))) {
+        if ((y > BUTTON_Y + y_offset) && (y <= (BUTTON_Y + y_offset + BUTTON_H))) {
+          if (y_offset == MATERIAL_CHANGE_BUTTON_Y_OFFSET) {
+            //  the material change area was depressed
+            if (x >= BUTTON_X + BUTTON_W / 2) {
+              //right side of area was pushed
+              material_List_Index = material_List_Index + 1;
+              if (material_List_Index > material_list_Length) {
+                material_List_Index = 0;
+              }
             }
             else {
-              diameter_List_Index = diameter_List_Index - 1;
+              //Left side of change area was depressed
+              if (material_List_Index == 0) {
+                material_List_Index = material_list_Length;
+              }
+              else {
+                material_List_Index = material_List_Index - 1;
+              }
             }
+            LastTouch_Millis = millis();
+            write_Change_Button(MATERIAL_CHANGE_BUTTON_Y_OFFSET, metals_List[material_list_Top[material_List_Index]], material_list_Bot[material_List_Index]);
           }
-          write_Change_Button(DIAMETER_CHANGE_BUTTON_Y_OFFSET, diameter_List[diameter_List_Index] + " dia", "");
-
-        }
-
-        if (y_offset == TOOL_CHANGE_BUTTON_Y_OFFSET) {
-          //  the tool change area was depressed
-          tool_List_Index = tool_List_Index + 1;
-          if (tool_List_Index > (tool_list_Length)) {
-            tool_List_Index = 0;
+  
+          if (y_offset == DIAMETER_CHANGE_BUTTON_Y_OFFSET) {
+            //The diameter change area was depressed
+            if (x >= BUTTON_X + BUTTON_W / 2) {
+              //right side of area was pushed
+              diameter_List_Index = diameter_List_Index + 1;
+              if (diameter_List_Index > diameter_list_Length) {
+                diameter_List_Index = 0;
+              }
+            }
+            else {
+              //left side of change area was depressed
+              if (diameter_List_Index == 0) {
+                diameter_List_Index = diameter_list_Length;
+              }
+              else {
+                diameter_List_Index = diameter_List_Index - 1;
+              }
+            }
+            LastTouch_Millis = millis();
+            write_Change_Button(DIAMETER_CHANGE_BUTTON_Y_OFFSET, diameter_List[diameter_List_Index] + " dia", "");
+  
           }
-          write_Change_Button(TOOL_CHANGE_BUTTON_Y_OFFSET, tool_List[tool_List_Index], "");
+  
+          if (y_offset == TOOL_CHANGE_BUTTON_Y_OFFSET) {
+            //  the tool change area was depressed
+            tool_List_Index = tool_List_Index + 1;
+            if (tool_List_Index > (tool_list_Length)) {
+              tool_List_Index = 0;
+            }
+            LastTouch_Millis = millis();
+            write_Change_Button(TOOL_CHANGE_BUTTON_Y_OFFSET, tool_List[tool_List_Index], "");
+          }
         }
       }
     }
-    display_RPMS();
   }
 
   return;
@@ -482,42 +520,57 @@ String construct_Belt_Config(int rpm)
 }
 #endif  //End DISPLAY_PULLEY_CODES block
 
-#ifdef DISPLAY_ACTUAL_RPM // Only include next block if rpm sensor activated
 void rpm_event()
 //  this is the interrupt service routine which is entered every time there
 //  is a falling edge from the rpm sensor input to pin2 interrupt
 {
   state = !state;     //flip states so that we can detect this event in loop() below
 }
-#endif  //End DISPLAY_PULLEY_CODES block
-
 
 //************************Program Setup Section Runs Once at Startup*******************************
 void setup() {
   //  Uncomment next three lines if you want IDE monitor diagnostics
-  // Serial.begin(9600);
-  //  Serial.print("Lathe Display ");
-  //  Serial.println(VERSION);
-  //  instantiate tft and ts classes for screen display and touch screen respectively
-  tft.begin();
-  if (!ts.begin()) {
-    write_Change_Button(TOOL_CHANGE_BUTTON_Y_OFFSET, "TS Failure!", "");
+  Serial.begin(9600);
+  Serial.print("Lathe Display ");
+  Serial.println(VERSION);
+
+  //instantiate tft and ts classes for screen display and touch screen respectively
+  Serial.print("TFT size is "); Serial.print(tft.width()); Serial.print("x"); Serial.println(tft.height());
+
+  tft.reset();
+
+  uint16_t identifier = tft.readID();
+  if(identifier == 0x9325) {
+    Serial.println(F("Found ILI9325 LCD driver"));
+  } else if(identifier == 0x9328) {
+    Serial.println(F("Found ILI9328 LCD driver"));
+  } else if(identifier == 0x4535) {
+    Serial.println(F("Found LGDP4535 LCD driver"));
+  }else if(identifier == 0x7575) {
+    Serial.println(F("Found HX8347G LCD driver"));
+  } else if(identifier == 0x9341) {
+    Serial.println(F("Found ILI9341 LCD driver"));
+  } else if(identifier == 0x8357) {
+    Serial.println(F("Found HX8357D LCD driver"));
+  } else if(identifier==0x0101)
+  {     
+      identifier=0x9341;
+       Serial.println(F("Found 0x9341 LCD driver"));
+  }else {
+    Serial.print(F("Unknown LCD driver chip: "));
+    Serial.println(identifier, HEX);
+    Serial.println(F("If using the Elegoo 2.8\" TFT Arduino shield, the line:"));
+    Serial.println(F("  #define USE_Elegoo_SHIELD_PINOUT"));
+    Serial.println(F("should appear in the library header (Elegoo_TFT.h)."));
+    Serial.println(F("If using the breakout board, it should NOT be #defined!"));
+    Serial.println(F("Also if using the breakout, double-check that all wiring"));
+    Serial.println(F("matches the tutorial."));
+    identifier=0x9341;
+   
   }
 
-  // read diagnostics (optional) to help debug  tft problems)
-  /**
-    uint8_t x = tft.readcommand8(ILI9341_RDMODE);
-    Serial.print("Display Power Mode: 0x"); Serial.println(x, HEX);
-    x = tft.readcommand8(ILI9341_RDMADCTL);
-    Serial.print("MADCTL Mode: 0x"); Serial.println(x, HEX);
-    x = tft.readcommand8(ILI9341_RDPIXFMT);
-    Serial.print("Pixel Format: 0x"); Serial.println(x, HEX);
-    x = tft.readcommand8(ILI9341_RDIMGFMT);
-    Serial.print("Image Format: 0x"); Serial.println(x, HEX);
-    x = tft.readcommand8(ILI9341_RDSELFDIAG);
-    Serial.print("Self Diagnostic: 0x"); Serial.println(x, HEX);
-   **/
-
+  tft.begin(identifier);
+  
   // Before leaving setup write all default settings to the screen:
   tft.setRotation(rotation);
   write_Static_Text();
@@ -527,16 +580,7 @@ void setup() {
 
   display_RPMS();
 
-#ifdef DISPLAY_ACTUAL_RPM // Only include next block if rpm sensor activated
-  //  setup interrupt structure for rpm detection
-  //  Allegro Hall Effect sensor has Open Collector output so use input  internal pull up resistor
-  pinMode(pin_D2, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(pin_D2), rpm_event, FALLING);
-  save_State = state;
-  Time = micros();
-  //  Serial.print("measured rpm = ");
-  //  Serial.println(String(rpm));
-#endif  // End DISPLAY_ACTUAL_RPM block
+  enable_RPM_Interrupt();
 
   // Leave setup
 }
@@ -549,12 +593,11 @@ void loop() {
   Touch(DIAMETER_CHANGE_BUTTON_Y_OFFSET);
   Touch(TOOL_CHANGE_BUTTON_Y_OFFSET);
 
-#ifdef DISPLAY_ACTUAL_RPM // Only include next block if rpm sensor activated
   if (save_State != state) {  //detected an rpm pulse
     save_Time = micros();
     rpm = int((60 * 1000000) / ((save_Time - Time) * NBR_TEETH));
     Time = save_Time;
-    state = save_State;
+    save_State = state; //was this, and it looks backwards: state = save_State;
     count = count + 1;
     if (count >= count_Max) {
       display_RPMS();
@@ -569,7 +612,5 @@ void loop() {
     Time = save_Time;
     display_RPMS();
   }
-  
-#endif //End DISPLAY_ACTUAL_RPM block
     
 }
